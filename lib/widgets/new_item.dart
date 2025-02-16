@@ -1,8 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_shopping_list_app_tutorial_udemy/data/categories.dart';
-import 'package:flutter_shopping_list_app_tutorial_udemy/dialog/success_dialog.dart';
 import 'package:flutter_shopping_list_app_tutorial_udemy/models/category.dart';
 import 'package:flutter_shopping_list_app_tutorial_udemy/models/grocery_item.dart';
+import 'package:http/http.dart' as http;
 
 class NewItem extends StatefulWidget {
   const NewItem({super.key});
@@ -23,7 +25,14 @@ class _NewItemState extends State<NewItem> {
   String _currentName = "";
   Category _selectedCategory = categories[Categories.vegetables]!;
 
-  void _saveItem() {
+  // NOTE: state variable that will indicate that we are sending HTTP request
+  // and its still in progress -> we will want to show a spinner while that is
+  // in progress as well as disable all buttons so user won't click them
+  // if request takes some time to be processed
+  // initially set to false as we are not sending anything just yet
+  var _isSending = false;
+
+  void _saveItem() async {
     final isValid = _formKey.currentState!.validate();
     if (!isValid) {
       return;
@@ -31,16 +40,32 @@ class _NewItemState extends State<NewItem> {
 
     // save the form
     _formKey.currentState!.save();
-    print(_currentName);
-    print(_currentQuantity);
-    print(_selectedCategory.name);
 
-    // pop the screen and pass back a Grocery item
-    Navigator.of(context).pop(GroceryItem(
-        id: DateTime.now().toString(),
-        name: _currentName,
-        quantity: _currentQuantity,
-        category: _selectedCategory)
+    // indicate that we are sending the request
+    setState(() {
+      _isSending = true;
+    });
+
+    // instead we will be sending it to HTTP backend
+    // shopping-list.json is just a path to the database that Firebase will use
+    final url = Uri.https(
+      "flutter-shop-list-app-tutorial-default-rtdb.firebaseio.com",
+      "shopping-list.json",
+    );
+
+    // send HTTP Post request and wait for the Response
+    // one way is to use .then((response)) and do whatever we need, but that
+    // might be inconvenient to write
+    final response = await http.post(
+      url,
+      headers: {"Content-Type": "application/json"},
+      body: json.encode(
+        {
+          "name": _currentName,
+          "quantity": _currentQuantity,
+          "category": _selectedCategory.name,
+        },
+      ),
     );
 
     // one option is to use a dialog to show that item was added successfully
@@ -52,13 +77,37 @@ class _NewItemState extends State<NewItem> {
     //     )
     // );
 
+    // with async calls Flutter is warning you about whether context was valid
+    // as there could be some async gaps
+    // rewriting the code to not use the 'BuildContext', or guard the use
+    // with a 'mounted' check.
+    // False will indicate that context is not mounted anymore
+    if (!context.mounted) {
+      return;
+    }
+
     // but for simplicity we will just show a little snack-bar message
+    // ignore: use_build_context_synchronously
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text("Item added successfully!"),
         duration: const Duration(seconds: 3),
       ),
     );
+
+    // IMPORTANT: this will pop the current screen and will return the item
+    // including its ID that we will get from the the port request above ->
+    // this will be done in order to avoid sending HTTP request to the server
+    // to get the the items (list already loaded so we will just append it
+    final Map<String, dynamic> responseData = json.decode(response.body);
+
+    // ignore: use_build_context_synchronously
+    Navigator.of(context).pop(GroceryItem(
+      id: responseData["name"],
+      name: _currentName,
+      quantity: _currentQuantity,
+      category: _selectedCategory,
+    ));
   }
 
   @override
@@ -151,14 +200,31 @@ class _NewItemState extends State<NewItem> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
-                        onPressed: () {
-                          if (_formKey.currentState != null) {
-                            _formKey.currentState!.reset();
-                          }
-                        },
-                        child: const Text("Reset")),
+                      // IMPORTANT: this is an interesting one -> if isSending is
+                      // set to true we will return null -> this will disable the
+                      // button, otherwise we enable all content
+                      // NOTE: same will be applied to the ElevatedButton below
+                      onPressed: _isSending
+                          ? null
+                          : () {
+                              if (_formKey.currentState != null) {
+                                _formKey.currentState!.reset();
+                              }
+                            },
+                      child: const Text("Reset"),
+                    ),
                     ElevatedButton(
-                        onPressed: _saveItem, child: const Text("Add Item"))
+                      onPressed: _isSending ? null : _saveItem,
+
+                      // if we are sending the request then we will show a spinner
+                      child: _isSending
+                          ? const SizedBox(
+                              height: 16,
+                              width: 16,
+                              child: CircularProgressIndicator(),
+                            )
+                          : const Text("Add Item"),
+                    ),
                   ],
                 )
               ],
